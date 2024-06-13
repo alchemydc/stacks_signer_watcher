@@ -1,0 +1,30 @@
+{
+  "name": "stacks-signer-monitor",
+  "version": "0.0.1",
+  "description": "A simple app to monitor a Stacks signer and alert if it falls out of the signer set",
+  "main": "app.js",
+  "scripts": {
+    "start": "node ./src/app.js",
+    "debug": "DEBUG=http node ./src/app.js",
+    "test": "jest --detectOpenHandles --verbose --coverage ./tests/*"
+  },
+  "keywords": [
+    "stacks",
+    "signer",
+    "validator",
+    "monitor",
+    "stake"
+  ],
+  "author": "alchemydc",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^0.21.1",
+    "bignumber.js": "^9.1.2",
+    "debug": "^4.3.4",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "jest-mock-axios": "^4.7.3"
+  }
+}

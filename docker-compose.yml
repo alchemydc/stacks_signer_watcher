@@ -1,0 +1,8 @@
+version: '3'
+services:
+  app:
+    container_name: stacks_signer_watcher
+    build: .
+    env_file:
+      - .env
+    image: stacks_signer_watcher
