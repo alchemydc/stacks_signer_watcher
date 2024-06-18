@@ -1,7 +1,7 @@
 require('dotenv').config();
 
 // Check required environment variables
-if (!process.env.SIGNER_PUBLIC_KEYS || !process.env.DISCORD_WEBHOOK_URL || !process.env.CHECK_INTERVAL || !process.env.API_URL || !process.env.REPEAT_CHECKS) {
+if (!process.env.SIGNER_PUBLIC_KEYS || !process.env.DISCORD_WEBHOOK_URL || !process.env.CHECK_INTERVAL || !process.env.API_URL || !process.env.RPC_URL || !process.env.REPEAT_CHECKS) {
   console.error('Missing required environment variable(s). Please check the README for instructions on how to set them.');
   process.exit(1);
 }
@@ -16,6 +16,7 @@ const signerPublicKeys = process.env.SIGNER_PUBLIC_KEYS.split(','); // read sign
 const discordWebhookUrl = process.env.DISCORD_WEBHOOK_URL; // read Discord webhook URL from environment variable
 const checkInterval = Number(process.env.CHECK_INTERVAL); // read check interval from environment variable
 const apiUrl = process.env.API_URL; // read API URL from environment variable
+const rpcUrl = process.env.RPC_URL; // read RPC URL from environment variable
 const repeatChecks = process.env.REPEAT_CHECKS; // read repeat checks from environment variable
 
 // Constants
@@ -58,6 +59,52 @@ const sendDiscordNotification = async (message, validatorId) => {
   } else {
     console.log(`Suppressing Discord notification for validatorId: ${validatorId} because 24 hours have not passed since the last notification.`);
   } 
+}
+
+/** 
+ * Checks health of the stacks RPC and compares it against the public API endpoint
+ * @param {string} rpcUrl - The URL of the RPC endpoint.
+ * @param {string} apiUrl - The URL of the public API endpoint.
+ */
+const checkHealth = async (rpcUrl, apiUrl) => {
+  try {
+    const rpcResponse = await axios.get(`${rpcUrl}/v2/info`, {
+    });
+    const apiResponse = await axios.get(`${apiUrl}/extended`, {
+    });
+    console.log('RPC health:', rpcResponse.status);
+    console.log('API health:', apiResponse.status);
+    console.log('RPC burn_block_height:', rpcResponse.data.burn_block_height);
+    console.log('RPC stacks_tip_height:', rpcResponse.data.stacks_tip_height);
+    const rpc_burnBlockHeight = rpcResponse.data.burn_block_height;
+    const rpc_stacks_tip_height = rpcResponse.data.stacks_tip_height;
+    console.log('API burn_block_height:', apiResponse.data.chain_tip.burn_block_height);
+    console.log('API stacks_tip_height:', apiResponse.data.chain_tip.block_height);
+    const api_burnBlockHeight = apiResponse.data.chain_tip.burn_block_height;
+    const api_stacks_tip_height = apiResponse.data.chain_tip.block_height;
+
+    // compare the burn block height from the RPC and API endpoints
+    if (rpc_burnBlockHeight !== api_burnBlockHeight) {
+      const message = `Error: Burn block height mismatch. RPC burn_block_height: ${rpc_burnBlockHeight}, API burn_block_height: ${api_burnBlockHeight}`;
+      console.error(message);
+      sendDiscordNotification(message, 'N/A');
+    } else {
+      console.log('Burn block heights match');
+    }
+    // compare the stacks tip height from the RPC and API endpoints
+    if (rpc_stacks_tip_height !== api_stacks_tip_height) {
+      const message = `Error: Stacks tip height mismatch. RPC stacks_tip_height: ${rpc_stacks_tip_height}, API stacks_tip_height: ${api_stacks_tip_height}`;
+      console.error(message);
+      sendDiscordNotification(message, 'N/A');
+    } else {
+      console.log('Stacks tip heights match');
+    }
+
+  } catch (error) {
+    // send a discord notification if the health check fails
+    sendDiscordNotification(`Error: Failed to check health. Error: ${error.message}`, 'N/A');
+    console.error(`Failed to check health. Error: ${error.message}`);
+  }
 }
 
 /**
@@ -143,6 +190,7 @@ async function main() {
 console.log('Starting Stacks Signer Watcher');
 console.log("Signer Public Keys: " + signerPublicKeys);
 console.log("Using API URL: " + apiUrl);
+console.log("Using RPC URL: " + rpcUrl);
 console.log('lastNotificationTimes:', lastNotificationTimes);
 console.log("Discord webhook URL: " + discordWebhookUrl);
 console.log("Checking stake every " + checkInterval + " seconds");
@@ -151,6 +199,8 @@ if (repeatChecks == "true") {
   console.log("Repeat checks enabled");
   console.log("Will run checks every " + checkInterval + " seconds");
   setInterval(async () => {
+    console.log("Checking health of the Stacks RPC and API endpoints");
+    checkHealth(rpcUrl, apiUrl);
     console.log('Checking current POX cycle')
     const currentCycle = await getCurrentCycle();
     const currentCycleID = currentCycle.id;
@@ -163,6 +213,8 @@ if (repeatChecks == "true") {
    }, checkInterval * 1000);
  } else {
    console.log("Repeat checks disabled, running once then will exit");
+   console.log("Checking health of the Stacks RPC and API endpoints");
+    checkHealth(rpcUrl, apiUrl);
    console.log('Checking current POX cycle')
    const currentCycle = await getCurrentCycle();
    const currentCycleID = currentCycle.id;
