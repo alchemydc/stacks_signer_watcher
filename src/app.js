@@ -1,7 +1,7 @@
 require('dotenv').config();
 
 // Check required environment variables
-if (!process.env.SIGNER_PUBLIC_KEYS || !process.env.DISCORD_WEBHOOK_URL || !process.env.CHECK_INTERVAL || !process.env.API_URL || !process.env.REPEAT_CHECKS) {
+if (!process.env.MONITORED_SIGNER_PUBLIC_KEYS || !process.env.DISCORD_WEBHOOK_URL || !process.env.CHECK_INTERVAL || !process.env.API_URL || !process.env.REPEAT_CHECKS || !process.env.NOTIFY_HOURS_BEFORE_PREPARE_PHASE) {
   console.error('Missing required environment variable(s). Please check the README for instructions on how to set them.');
   process.exit(1);
 }
@@ -12,11 +12,12 @@ const debug = require('debug')('http');
 // invoke as `DEBUG=http node app.js` to see HTTP requests and responses
 const BigNumber = require('bignumber.js');
 
-const signerPublicKeys = process.env.SIGNER_PUBLIC_KEYS.split(','); // read signer public keys from environment variable
+const monitoredSignerPublicKeys = process.env.MONITORED_SIGNER_PUBLIC_KEYS.split(','); // read signer public keys from environment variable
 const discordWebhookUrl = process.env.DISCORD_WEBHOOK_URL; // read Discord webhook URL from environment variable
 const checkInterval = Number(process.env.CHECK_INTERVAL); // read check interval from environment variable
 const apiUrl = process.env.API_URL; // read API URL from environment variable
 const repeatChecks = process.env.REPEAT_CHECKS; // read repeat checks from environment variable
+const notifyHoursBeforePreparePhase = Number(process.env.NOTIFY_HOURS_BEFORE_PREPARE_PHASE); // read notify hours before prepare phase from environment variable
 
 // Constants
 const oneDayInMilliseconds = 24 * 60 * 60 * 1000;
@@ -61,51 +62,64 @@ const sendDiscordNotification = async (message, validatorId) => {
 }
 
 /**
- * Finds the current POX cycle.
- */
-const getCurrentCycle = async () => {
+ * Get relevant info from the current POX cycle as well as the next POX cycle
+ * 
+*/
+const getCurrentAndNextCycle = async () => {
   try {
     const response = await axios.get(`${apiUrl}/v2/pox`, {
     });
-
-    //console.log(response.data.current_cycle);
-    //const { data } = response.data;
-    //console.log(data);
-    //const currentCycle = response.data.current_cycle.id;
     const currentCycle = response.data.current_cycle;
-    return currentCycle;
+    const nextCycle = response.data.next_cycle;
+    return { currentCycle, nextCycle };
   } catch (error) {
-    console.error(`Failed to fetch current cycle. Error: ${error.message}`);
+    console.error(`Failed to fetch POX info for current and next cycle. Error: ${error.message}`);
     return null;
   }
 }
 
 /**
- * Check the status for a given signer public key in the current cycle
- @param {string} signerPublicKey - The public key of the signer.
- @param {int} cycleId - The ID of the cycle.
- @param {int} minThreshold - The minimum threshold an elected signer this cycle.
+ * Get the signers for a given cycle.
  */
-const checkSigner = async (signerPublicKey, cycleId, currentCycleMinThreshold) => {
+const getSigners = async (cycleId) => {
   try {
-    //console.log(`Checking cycleId ${cycleId} for signer ${signerPublicKey}`);
-    //console.log(`query: ${apiUrl}/extended/v2/pox/cycles/${cycleId}/signers/${signerPublicKey}`);
-    const response = await axios.get(`${apiUrl}/extended/v2/pox/cycles/${cycleId}/signers/${signerPublicKey}`, {
+    //console.log("Request URI: " + `${apiUrl}/signer-metrics/v1/cycles/${cycleId}/signers`);
+    const response = await axios.get(`${apiUrl}/signer-metrics/v1/cycles/${cycleId}/signers`, {
     });
-    const signer_stake = await checkSignerStake(signerPublicKey, response.data.stacked_amount, currentCycleMinThreshold);
+    //console.log(response.data);
+    console.log(`${response.data.total} of ${response.data.limit} possible signers registered found for cycleId: ${cycleId}`);
+    return response.data;
   } catch (error) {
-    // API should return http/400 if the signer is not found in the cycle
-    if (error.response && error.response.status === 400) {
-      const message=`Error: Signer ${signerPublicKey} not found in cycle ${cycleId}`;
-      console.error(message);
-      sendDiscordNotification(message, signerPublicKey);
-    } else {
-      // if the API call fails for any other reason, send a Discord notification
-      const message=`Error: Failed to fetch signer for cycleId: ${cycleId}. Error: ${error.message}`;
-      console.error(message);
-      sendDiscordNotification(message, signerPublicKey);
+    console.error(`Failed to fetch signers for cycleId: ${cycleId}. Error: ${error.message}`);
+    return null;
   }
- }
+}
+
+
+/**
+ * Calculate the estimated time when the prepare phase for the next cycle will start
+ * based on how many burnchain blocks are left until the prepare phase starts.
+ * @param {int} blocksUntilPreparePhase - The number of burnchain blocks until the prepare phase starts.
+ */
+function calculatePreparePhaseStartTime(blocksUntilPreparePhase) {
+  
+  // burn chain has a 10 minute block time
+  const blockTime = 10 * 60; // 10 minutes in seconds
+  // current time in seconds
+  const currentTime = Math.floor(Date.now() / 1000); // convert milliseconds to seconds
+  console.log(`Current time: ${new Date(currentTime * 1000)}`);
+  const preparePhaseStartTime = currentTime + (blocksUntilPreparePhase * blockTime);
+  console.log(`Estimated time when the prepare phase for the next cycle will start: ${new Date(preparePhaseStartTime * 1000)}`);
+  // log the hours until the prepare phase starts
+  const hoursUntilPreparePhase = (preparePhaseStartTime - currentTime) / 3600;
+  console.log(`Estimated hours until the prepare phase starts: ${hoursUntilPreparePhase}`);
+  // send an alert if the prepare phase is starting in less than 72 hours
+  if (preparePhaseStartTime - currentTime < notifyHoursBeforePreparePhase * 60 * 60) {
+    const message = `Alert: The prepare phase for the next cycle is starting in ${blocksUntilPreparePhase} burnchain blocks. Estimated start time: ${new Date(preparePhaseStartTime * 1000)}`;
+    console.log(message);
+    sendDiscordNotification(message, 'preparePhaseStartTime');
+  }
+  return preparePhaseStartTime; 
 }
 
 /**
@@ -129,23 +143,87 @@ const checkSignerStake = (signerPublicKey, signerStake, requiredStake) => {
   }
 }
 
+/**
+ * Analyze data for the current cycle and next cycle and send alerts as necessary
+ * Specifically we are looking to see if the prepare phase for the next cycle is starting soon
+ * STX must be locked before the prepare phase for the next reward cycle starts
+ * So if you don't lock and commit STX prior to the start of the prepare phase, you will miss out on rewards for the next cycle
+ */
+function analyzePOXCycles(currentCycle, nextCycle) {
+  console.log('Current POX cycle:', currentCycle);
+   console.log('Next POX cycle:', nextCycle);
+   const currentCycleID = currentCycle.id;
+   const currentCycleMinThreshold = currentCycle.min_threshold_ustx;
+   console.log('Current POX cycle ID:', currentCycleID);
+   console.log('Current POX cycle minimum threshold:', currentCycleMinThreshold + "ustx");
+   const nextCycleID = nextCycle.id;
+   console.log('Next POX cycle ID:', nextCycleID);
+   console.log("next POC cycle minimum threshold:", nextCycle.min_threshold_ustx + "ustx");
+   console.log("next cycle prepare phase starts in " + nextCycle.blocks_until_prepare_phase + " burnchain blocks");
+}
+
+/**
+ * Check and see if the signers we are monitoring are in the active set for the current cycle
+ * If they are, then we will check their stake and send a notification if it is below the minimum threshold
+ * If they are not in the active set, then we will send a notification
+ * Takes a list of signer public keys that we are monitoring and the signers for the current cycle as params
+ * @param {Array} monitoredSignerPublicKeys - The public keys of the signers we are monitoring.
+ * @param {Object} cycleSigners - The signers for the current cycle.
+*/
+function checkSignersInActiveSet(monitoredSignerPublicKeys, cycleSigners, minimumRequiredStake) {
+  // iterate over each signer and see if it is one of the ones we care about
+  cycleSigners.results.forEach((signer) => {
+    //console.log("Evaluating signer: " + signer.signer_key);
+    if 
+    (monitoredSignerPublicKeys.includes(signer.signer_key)) {
+      console.log("Found our signer in active set for cycle: " + signer.signer_key);
+      console.log(signer);
+      console.log(`Checking stake for signer ${signer.signer_key}`);
+      console.log(`Stacked amount: ${signer.stacked_amount}`);
+      console.log(`Minimum threshold: ${minimumRequiredStake}`);
+      checkSignerStake(signer.signer_key, signer.stacked_amount, minimumRequiredStake);
+    }
+  });
+}
+
+function checkMissingSigners(cycleSigners, monitoredSignerPublicKeys) {
+  // Find signers that are monitored but not in cycle
+  const missingFromCycle = monitoredSignerPublicKeys.filter(monitoredKey => 
+      !cycleSigners.results.some(signer => signer.signer_key === monitoredKey)
+  );
+
+  // Send notifications for missing signers
+  if (missingFromCycle.length > 0) {
+      const message = `Alert: The following monitored signers are not in the active set for the current cycle: ${missingFromCycle.join(', ')}`;
+      console.log(message);
+      sendDiscordNotification(message, 'missing-signers');
+  }
+}
+
+
 // Export functions for testing
 module.exports = {
-  getCurrentCycle,
+  getCurrentAndNextCycle,
+  calculatePreparePhaseStartTime,
+  getSigners,
   checkSigner,
   checkSignerStake,
   sendDiscordNotification,
-  lastNotificationTimes
+  lastNotificationTimes,
+  analyzePOXCycles,
+  checkSignersInActiveSet,
+  checkMissingSigners
 };
 
 async function main() {
 
 console.log('Starting Stacks Signer Watcher');
-console.log("Signer Public Keys: " + signerPublicKeys);
+console.log("Signer Public Keys: " + monitoredSignerPublicKeys);
 console.log("Using API URL: " + apiUrl);
 console.log('lastNotificationTimes:', lastNotificationTimes);
 console.log("Discord webhook URL: " + discordWebhookUrl);
-console.log("Checking stake every " + checkInterval + " seconds");
+console.log("Checking status every " + checkInterval + " seconds");
+console.log(`Notifying ~${notifyHoursBeforePreparePhase} hours before next prepare phase begins`);
 
 if (repeatChecks == "true") {
   console.log("Repeat checks enabled");
@@ -157,22 +235,20 @@ if (repeatChecks == "true") {
     const currentCycleMinThreshold = currentCycle.min_threshold_ustx;
     console.log('Current POX cycle ID:', currentCycleID);
     console.log('Current POX cycle minimum threshold:', currentCycleMinThreshold + "ustx");
-    signerPublicKeys.forEach((signerPublicKey) => {
+    monitoredSignerPublicKeys.forEach((signerPublicKey) => {
       checkSigner(signerPublicKey, currentCycleID, currentCycleMinThreshold);
     });
    }, checkInterval * 1000);
  } else {
    console.log("Repeat checks disabled, running once then will exit");
-   console.log('Checking current POX cycle')
-   const currentCycle = await getCurrentCycle();
-   const currentCycleID = currentCycle.id;
-   const currentCycleMinThreshold = currentCycle.min_threshold_ustx;
-   console.log('Current POX cycle ID:', currentCycleID);
-   console.log('Current POX cycle minimum threshold:', currentCycleMinThreshold + "ustx");
-   signerPublicKeys.forEach((signerPublicKey) => {
-    console.log('Checking signer:', signerPublicKey); 
-    checkSigner(signerPublicKey, currentCycleID, currentCycleMinThreshold);
-   });
+   console.log('Getting data for current and next POX cycles')
+   const { currentCycle, nextCycle } = await getCurrentAndNextCycle();
+   console.log('Analyzing POX cycles');
+   analyzePOXCycles(currentCycle, nextCycle);
+   const cycleSigners = await getSigners(currentCycle.id);
+   checkMissingSigners(cycleSigners, monitoredSignerPublicKeys);
+   checkSignersInActiveSet(monitoredSignerPublicKeys, cycleSigners, currentCycle.min_threshold_ustx);
+   
  }
 
 }

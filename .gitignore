@@ -131,3 +131,7 @@ dist
 
 # vscode workspaces
 *.code-workspace
+
+
+# private notes
+private/
