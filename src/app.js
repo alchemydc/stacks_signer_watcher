@@ -160,12 +160,13 @@ function analyzePOXCycles(currentCycle, nextCycle) {
    console.log('Next POX cycle ID:', nextCycleID);
    console.log("next POC cycle minimum threshold:", nextCycle.min_threshold_ustx + "ustx");
    console.log("next cycle prepare phase starts in " + nextCycle.blocks_until_prepare_phase + " burnchain blocks");
+   calculatePreparePhaseStartTime(nextCycle.blocks_until_prepare_phase);
 }
 
 /**
  * Check and see if the signers we are monitoring are in the active set for the current cycle
  * If they are, then we will check their stake and send a notification if it is below the minimum threshold
- * If they are not in the active set, then we will send a notification
+ * If any of our monitored signers are not in the active set, then we will send a notification
  * Takes a list of signer public keys that we are monitoring and the signers for the current cycle as params
  * @param {Array} monitoredSignerPublicKeys - The public keys of the signers we are monitoring.
  * @param {Object} cycleSigners - The signers for the current cycle.
@@ -206,7 +207,6 @@ module.exports = {
   getCurrentAndNextCycle,
   calculatePreparePhaseStartTime,
   getSigners,
-  checkSigner,
   checkSignerStake,
   sendDiscordNotification,
   lastNotificationTimes,
@@ -229,15 +229,13 @@ if (repeatChecks == "true") {
   console.log("Repeat checks enabled");
   console.log("Will run checks every " + checkInterval + " seconds");
   setInterval(async () => {
-    console.log('Checking current POX cycle')
-    const currentCycle = await getCurrentCycle();
-    const currentCycleID = currentCycle.id;
-    const currentCycleMinThreshold = currentCycle.min_threshold_ustx;
-    console.log('Current POX cycle ID:', currentCycleID);
-    console.log('Current POX cycle minimum threshold:', currentCycleMinThreshold + "ustx");
-    monitoredSignerPublicKeys.forEach((signerPublicKey) => {
-      checkSigner(signerPublicKey, currentCycleID, currentCycleMinThreshold);
-    });
+    console.log('Getting data for current and next POX cycles')
+    const { currentCycle, nextCycle } = await getCurrentAndNextCycle();
+    console.log('Analyzing POX cycles');
+    analyzePOXCycles(currentCycle, nextCycle);
+    const cycleSigners = await getSigners(currentCycle.id);
+    checkMissingSigners(cycleSigners, monitoredSignerPublicKeys);
+    checkSignersInActiveSet(monitoredSignerPublicKeys, cycleSigners, currentCycle.min_threshold_ustx); 
    }, checkInterval * 1000);
  } else {
    console.log("Repeat checks disabled, running once then will exit");
