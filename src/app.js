@@ -189,18 +189,21 @@ function checkSignersInActiveSet(monitoredSignerPublicKeys, cycleSigners, minimu
 
 function checkMissingSigners(cycleSigners, monitoredSignerPublicKeys) {
   // Find signers that are monitored but not in cycle
-  const missingFromCycle = monitoredSignerPublicKeys.filter(monitoredKey => 
-      !cycleSigners.results.some(signer => signer.signer_key === monitoredKey)
-  );
-
-  // Send notifications for missing signers
-  if (missingFromCycle.length > 0) {
+  try {
+    const missingFromCycle = monitoredSignerPublicKeys.filter(monitoredKey =>
+          !cycleSigners.results.some(signer => signer.signer_key === monitoredKey)
+    );
+    // Send notifications for missing signers
+    if (missingFromCycle.length > 0) {
       const message = `Alert: The following monitored signers are not in the active set for the current cycle: ${missingFromCycle.join(', ')}`;
       console.log(message);
       sendDiscordNotification(message, 'missing-signers');
   }
+  } catch (error) {
+    console.error(`Failed to check for missing signers. Error: ${error.message}`);
+    sendDiscordNotification(`Error checking missing signers: ${error.message}`, 'error');
+  }
 }
-
 
 // Export functions for testing
 module.exports = {
