@@ -172,6 +172,12 @@ function analyzePOXCycles(currentCycle, nextCycle) {
  * @param {Object} cycleSigners - The signers for the current cycle.
 */
 function checkSignersInActiveSet(monitoredSignerPublicKeys, cycleSigners, minimumRequiredStake) {
+  if (!cycleSigners?.results) {
+    console.error('No cycle signers data available');
+    sendDiscordNotification('Error: No cycle signers data available', 'error');
+    return;
+  }
+
   // iterate over each signer and see if it is one of the ones we care about
   cycleSigners.results.forEach((signer) => {
     //console.log("Evaluating signer: " + signer.signer_key);
@@ -188,7 +194,18 @@ function checkSignersInActiveSet(monitoredSignerPublicKeys, cycleSigners, minimu
 }
 
 function checkMissingSigners(cycleSigners, monitoredSignerPublicKeys) {
-  // Find signers that are monitored but not in cycle
+  if (!cycleSigners?.results) {
+    console.error('No cycle signers data available');
+    sendDiscordNotification('Error: No cycle signers data available', 'error');
+    return;
+  }
+
+  if (!Array.isArray(monitoredSignerPublicKeys)) {
+    console.error('Invalid monitored signer keys format');
+    sendDiscordNotification('Error: Invalid monitored signer keys format', 'error');
+    return;
+  }
+
   try {
     const missingFromCycle = monitoredSignerPublicKeys.filter(monitoredKey =>
           !cycleSigners.results.some(signer => signer.signer_key === monitoredKey)
