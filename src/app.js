@@ -67,11 +67,15 @@ const sendDiscordNotification = async (message, validatorId) => {
 */
 const getCurrentAndNextCycle = async () => {
   try {
-    const response = await axios.get(`${apiUrl}/v2/pox`, {
-    });
-    const currentCycle = response.data.current_cycle;
-    const nextCycle = response.data.next_cycle;
-    return { currentCycle, nextCycle };
+    const response = await axios.get(`${apiUrl}/v2/pox`);
+    if (!response?.data?.current_cycle || !response?.data?.next_cycle) {
+      console.error('Invalid response format from POX API');
+      return null;
+    }
+    return {
+      currentCycle: response.data.current_cycle,
+      nextCycle: response.data.next_cycle
+    };
   } catch (error) {
     console.error(`Failed to fetch POX info for current and next cycle. Error: ${error.message}`);
     return null;
@@ -245,29 +249,37 @@ console.log("Discord webhook URL: " + discordWebhookUrl);
 console.log("Checking status every " + checkInterval + " seconds");
 console.log(`Notifying ~${notifyHoursBeforePreparePhase} hours before next prepare phase begins`);
 
-if (repeatChecks == "true") {
-  console.log("Repeat checks enabled");
-  console.log("Will run checks every " + checkInterval + " seconds");
-  setInterval(async () => {
-    console.log('Getting data for current and next POX cycles')
-    const { currentCycle, nextCycle } = await getCurrentAndNextCycle();
+const runChecks = async () => {
+  try {
+    console.log('Getting data for current and next POX cycles');
+    const cycleData = await getCurrentAndNextCycle();
+    if (!cycleData) {
+      console.error('Failed to get cycle data, skipping this check');
+      return;
+    }
+
+    const { currentCycle, nextCycle } = cycleData;
     console.log('Analyzing POX cycles');
     analyzePOXCycles(currentCycle, nextCycle);
     const cycleSigners = await getSigners(currentCycle.id);
-    checkMissingSigners(cycleSigners, monitoredSignerPublicKeys);
-    checkSignersInActiveSet(monitoredSignerPublicKeys, cycleSigners, currentCycle.min_threshold_ustx); 
-   }, checkInterval * 1000);
- } else {
-   console.log("Repeat checks disabled, running once then will exit");
-   console.log('Getting data for current and next POX cycles')
-   const { currentCycle, nextCycle } = await getCurrentAndNextCycle();
-   console.log('Analyzing POX cycles');
-   analyzePOXCycles(currentCycle, nextCycle);
-   const cycleSigners = await getSigners(currentCycle.id);
-   checkMissingSigners(cycleSigners, monitoredSignerPublicKeys);
-   checkSignersInActiveSet(monitoredSignerPublicKeys, cycleSigners, currentCycle.min_threshold_ustx);
-   
- }
+    if (cycleSigners) {
+      checkMissingSigners(cycleSigners, monitoredSignerPublicKeys);
+      checkSignersInActiveSet(monitoredSignerPublicKeys, cycleSigners, currentCycle.min_threshold_ustx);
+    }
+  } catch (error) {
+    console.error('Error during check cycle:', error);
+    sendDiscordNotification(`Error during check cycle: ${error.message}`, 'error');
+  }
+};
+
+if (repeatChecks === "true") {
+  console.log("Repeat checks enabled");
+  console.log(`Will run checks every ${checkInterval} seconds`);
+  setInterval(runChecks, checkInterval * 1000);
+} else {
+  console.log("Repeat checks disabled, running once then will exit");
+  await runChecks();
+}
 
 }
 
